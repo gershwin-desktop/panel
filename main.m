@@ -1,15 +1,18 @@
-#import "AppDelegate.h"
 #import <AppKit/AppKit.h>
+#import "Panel.h"
 
 int main(int argc, const char *argv[])
 {
-  @autoreleasepool {
+    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
+    
     [NSApplication sharedApplication];
-
-    AppDelegate *delegate = [[AppDelegate alloc] init];
-    [NSApp setDelegate:delegate];
-
+    
+    Panel *panel = [[Panel alloc] init];
+    [panel createPanel];
+    
     [NSApp run];
-  }
-  return 0;
+    
+    [panel release];
+    [pool release];
+    return 0;
 }
