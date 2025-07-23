@@ -1,6 +1,14 @@
 #import "Panel.h"
+
+// Only include X11 headers if we can use them
+#ifdef HAVE_X11
 #import <X11/Xlib.h>
 #import <X11/Xatom.h>
+#define CAN_USE_X11 1
+#else
+#define CAN_USE_X11 0
+#warning "X11 not available - panel will not reserve screen space"
+#endif
 
 #define PANEL_HEIGHT 28
 
@@ -44,21 +52,27 @@
     
     [panelWindow makeKeyAndOrderFront:nil];
     
-    [self performSelector:@selector(setupXWindowProperties) 
-               withObject:nil 
-               afterDelay:0.1];
-    
+    NSLog(@"Panel: Starting menu panel service...");
     [menuService startService];
     
-    NSLog(@"Panel created and service started");
+#if CAN_USE_X11
+    [self performSelector:@selector(setupXWindowProperties) 
+               withObject:nil 
+               afterDelay:0.5];
+#else
+    NSLog(@"Panel: X11 not available - panel will not reserve screen space");
+#endif
+    
+    NSLog(@"Panel: Panel ready");
 }
 
 - (void)setupXWindowProperties
 {
+#if CAN_USE_X11
     NSInteger windowNumber = [panelWindow windowNumber];
     Display *display = XOpenDisplay(NULL);
     if (!display) {
-        NSLog(@"Failed to open X display");
+        NSLog(@"Panel: Failed to open X display");
         return;
     }
     
@@ -83,17 +97,18 @@
     // Set struts to reserve screen space
     NSRect screenFrame = [[NSScreen mainScreen] frame];
     long strutPartial[12] = {
-        0, 0, PANEL_HEIGHT, 0,
-        0, 0,
-        0, 0,
-        0, (long)screenFrame.size.width-1,
-        0, 0
+        0, 0, PANEL_HEIGHT, 0,  // left, right, top, bottom
+        0, 0,                   // left_start_y, left_end_y
+        0, 0,                   // right_start_y, right_end_y
+        0, (long)screenFrame.size.width-1,  // top_start_x, top_end_x
+        0, 0                    // bottom_start_x, bottom_end_x
     };
     
     Atom strutPartialAtom = XInternAtom(display, "_NET_WM_STRUT_PARTIAL", False);
     XChangeProperty(display, xWindow, strutPartialAtom, XA_CARDINAL, 32,
                    PropModeReplace, (unsigned char*)strutPartial, 12);
     
+    // Legacy strut support
     long strut[4] = {0, 0, PANEL_HEIGHT, 0};
     Atom strutAtom = XInternAtom(display, "_NET_WM_STRUT", False);
     XChangeProperty(display, xWindow, strutAtom, XA_CARDINAL, 32,
@@ -102,7 +117,8 @@
     XFlush(display);
     XCloseDisplay(display);
     
-    NSLog(@"X11 window properties configured");
+    NSLog(@"Panel: X11 window properties configured");
+#endif
 }
 
 @end
