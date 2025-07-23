@@ -46,6 +46,8 @@
     NSLog(@"MenuPanelService: Setting root object to: %@ of class %@", self, [self class]);
     NSLog(@"MenuPanelService: Root object responds to registerApplication: %@", 
           [self respondsToSelector:@selector(registerApplication:)] ? @"YES" : @"NO");
+    NSLog(@"MenuPanelService: Root object responds to setMainMenu:forApplication: %@", 
+          [self respondsToSelector:@selector(setMainMenu:forApplication:)] ? @"YES" : @"NO");
     
     // Set timeouts
     [serverConnection setRequestTimeout:10.0];
@@ -93,31 +95,32 @@
 
 - (void)setMainMenu:(in bycopy NSMenu *)menu forApplication:(NSString *)appId
 {
-    NSLog(@"Panel: setMainMenu called for app %@", appId);
+    NSLog(@"Panel: *** setMainMenu CALLED for app %@ ***", appId);
     
     if (!menu || !appId) {
-        NSLog(@"Panel: Warning - nil menu (%@) or appId (%@)", menu, appId);
+        NSLog(@"Panel: ERROR - nil menu (%@) or appId (%@)", menu, appId);
         return;
     }
     
-    NSLog(@"Panel: Menu title: '%@'", [menu title]);
-    NSLog(@"Panel: Menu item count: %lu", (unsigned long)[[menu itemArray] count]);
+    NSLog(@"Panel: Received menu titled: '%@'", [menu title]);
+    NSLog(@"Panel: Menu has %lu items", (unsigned long)[[menu itemArray] count]);
     
-    // Log first few menu items for debugging
+    // Log the first few menu items we received
     NSArray *items = [menu itemArray];
-    for (NSUInteger i = 0; i < MIN(3, [items count]); i++) {
+    for (NSUInteger i = 0; i < MIN(5, [items count]); i++) {
         NSMenuItem *item = [items objectAtIndex:i];
         NSLog(@"Panel: Item %lu: '%@'", (unsigned long)i, [item title]);
     }
     
+    // Store the menu
     [applicationMenus setObject:menu forKey:appId];
     
     if ([appId isEqualToString:activeApplicationId] || !activeApplicationId) {
-        NSLog(@"Panel: Setting as active menu for app %@", appId);
+        NSLog(@"Panel: Setting app %@ as active and displaying menu", appId);
         activeApplicationId = appId;
         [self refreshMenuDisplay];
     } else {
-        NSLog(@"Panel: Menu stored for app %@ (not currently active)", appId);
+        NSLog(@"Panel: Menu stored for app %@ (active app is %@)", appId, activeApplicationId);
     }
 }
 
@@ -144,6 +147,7 @@
     NSLog(@"Panel: refreshMenuDisplay called");
     NSLog(@"Panel: activeApplicationId: %@", activeApplicationId);
     NSLog(@"Panel: menuDisplayView: %@", _menuDisplayView);
+    NSLog(@"Panel: stored menus: %@", [applicationMenus allKeys]);
     
     if (!activeApplicationId || !_menuDisplayView) {
         NSLog(@"Panel: Cannot refresh - missing activeApp or displayView");
@@ -173,7 +177,7 @@
 
 - (void)displayMenu:(NSMenu *)menu inView:(NSView *)view
 {
-    NSLog(@"Panel: displayMenu called with menu '%@'", menu ? [menu title] : @"(nil)");
+    NSLog(@"Panel: *** displayMenu called *** with menu '%@'", menu ? [menu title] : @"(nil)");
     
     // Remove ALL existing subviews
     NSArray *subviews = [[view subviews] copy];
@@ -189,8 +193,9 @@
         return;
     }
     
-    NSLog(@"Panel: Creating NSMenuView for menu with %lu items", (unsigned long)[[menu itemArray] count]);
+    NSLog(@"Panel: Creating NSMenuView for menu '%@' with %lu items", [menu title], (unsigned long)[[menu itemArray] count]);
     
+    // Create the menu view
     NSMenuView *menuView = [[NSMenuView alloc] initWithFrame:[view bounds]];
     [menuView setMenu:menu];
     [menuView setHorizontal:YES];
@@ -201,13 +206,20 @@
     [menuView sizeToFit];
     
     NSLog(@"Panel: Adding menu view with frame: %@", NSStringFromRect([menuView frame]));
+    NSLog(@"Panel: Menu view class: %@", [menuView class]);
     
     [view addSubview:menuView];
     [menuView release];
     
     [view setNeedsDisplay:YES];
     
-    NSLog(@"Panel: Menu display completed for '%@'", [menu title]);
+    NSLog(@"Panel: *** Menu display completed for '%@' ***", [menu title]);
+    
+    // Log what we actually have in the view now
+    NSLog(@"Panel: View now has %lu subviews", (unsigned long)[[view subviews] count]);
+    for (NSView *subview in [view subviews]) {
+        NSLog(@"Panel: Subview: %@ frame: %@", [subview class], NSStringFromRect([subview frame]));
+    }
 }
 
 @end
