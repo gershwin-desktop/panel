@@ -48,6 +48,8 @@
           [self respondsToSelector:@selector(registerApplication:)] ? @"YES" : @"NO");
     NSLog(@"MenuPanelService: Root object responds to setMainMenu:forApplication: %@", 
           [self respondsToSelector:@selector(setMainMenu:forApplication:)] ? @"YES" : @"NO");
+    NSLog(@"MenuPanelService: Root object responds to setMenuData:forApplication: %@", 
+          [self respondsToSelector:@selector(setMenuData:forApplication:)] ? @"YES" : @"NO");
     
     // Set timeouts
     [serverConnection setRequestTimeout:10.0];
@@ -93,9 +95,11 @@
     }
 }
 
-- (void)setMainMenu:(in bycopy NSMenu *)menu forApplication:(NSString *)appId
+- (void)setMainMenu:(in bycopy NSMenu *)menu forApplication:(in bycopy NSString *)appId
 {
-    NSLog(@"Panel: *** setMainMenu CALLED for app %@ ***", appId);
+    NSLog(@"Panel: *** setMainMenu CALLED - ENTRY POINT ***");
+    NSLog(@"Panel: appId: %@", appId);
+    NSLog(@"Panel: menu: %@", menu);
     
     if (!menu || !appId) {
         NSLog(@"Panel: ERROR - nil menu (%@) or appId (%@)", menu, appId);
@@ -122,6 +126,85 @@
     } else {
         NSLog(@"Panel: Menu stored for app %@ (active app is %@)", appId, activeApplicationId);
     }
+}
+
+- (void)setMenuData:(in bycopy NSDictionary *)menuData forApplication:(in bycopy NSString *)appId
+{
+    NSLog(@"Panel: *** setMenuData CALLED for app %@ ***", appId);
+    
+    if (!menuData || !appId) {
+        NSLog(@"Panel: ERROR - nil menuData (%@) or appId (%@)", menuData, appId);
+        return;
+    }
+    
+    NSLog(@"Panel: Received menu data: %@", menuData);
+    
+    // Convert dictionary back to NSMenu
+    NSMenu *reconstructedMenu = [self reconstructMenuFromDict:menuData];
+    if (reconstructedMenu) {
+        NSLog(@"Panel: Successfully reconstructed menu from data");
+        [self setMainMenu:reconstructedMenu forApplication:appId];
+    } else {
+        NSLog(@"Panel: Failed to reconstruct menu from dictionary data");
+    }
+}
+
+- (NSMenu *)reconstructMenuFromDict:(NSDictionary *)menuDict
+{
+    NSString *title = [menuDict objectForKey:@"title"];
+    if (!title) {
+        NSLog(@"Panel: No title in menu dictionary");
+        return nil;
+    }
+    
+    NSLog(@"Panel: Reconstructing menu titled: '%@'", title);
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:title];
+    NSArray *itemsArray = [menuDict objectForKey:@"items"];
+    
+    if (!itemsArray) {
+        NSLog(@"Panel: No items array in menu dictionary");
+        [menu release];
+        return nil;
+    }
+    
+    for (NSDictionary *itemDict in itemsArray) {
+        NSString *itemTitle = [itemDict objectForKey:@"title"];
+        BOOL isSeparator = [[itemDict objectForKey:@"separator"] boolValue];
+        
+        NSMenuItem *item;
+        if (isSeparator) {
+            item = [NSMenuItem separatorItem];
+            NSLog(@"Panel: Added separator item");
+        } else {
+            item = [[NSMenuItem alloc] initWithTitle:itemTitle action:NULL keyEquivalent:@""];
+            [item setEnabled:[[itemDict objectForKey:@"enabled"] boolValue]];
+            [item setHidden:[[itemDict objectForKey:@"hidden"] boolValue]];
+            
+            NSString *keyEquiv = [itemDict objectForKey:@"keyEquivalent"];
+            if (keyEquiv) {
+                [item setKeyEquivalent:keyEquiv];
+                [item setKeyEquivalentModifierMask:[[itemDict objectForKey:@"keyModifiers"] intValue]];
+            }
+            
+            // Handle submenu
+            NSDictionary *submenuDict = [itemDict objectForKey:@"submenu"];
+            if (submenuDict) {
+                NSMenu *submenu = [self reconstructMenuFromDict:submenuDict];
+                if (submenu) {
+                    [item setSubmenu:submenu];
+                    [submenu release];
+                }
+            }
+            
+            NSLog(@"Panel: Added menu item: '%@'", itemTitle);
+        }
+        
+        [menu addItem:item];
+        if (!isSeparator) [item release];
+    }
+    
+    NSLog(@"Panel: Reconstructed menu with %lu items", (unsigned long)[[menu itemArray] count]);
+    return [menu autorelease];
 }
 
 - (void)applicationDidBecomeActive:(NSString *)appId
@@ -177,6 +260,7 @@
 
 - (void)displayMenu:(NSMenu *)menu inView:(NSView *)view
 {
+    NSLog(@"Panel: *** DISPLAY MENU CALLED - menu: %@, view: %@", menu, view);
     NSLog(@"Panel: *** displayMenu called *** with menu '%@'", menu ? [menu title] : @"(nil)");
     
     // Remove ALL existing subviews
@@ -197,28 +281,55 @@
     
     // Create the menu view
     NSMenuView *menuView = [[NSMenuView alloc] initWithFrame:[view bounds]];
-    [menuView setMenu:menu];
+    
+    // CRITICAL: Set horizontal BEFORE setting the menu
     [menuView setHorizontal:YES];
     [menuView setInterfaceStyle:NSMacintoshInterfaceStyle];
+    
+    // Set the menu
+    [menuView setMenu:menu];
+    
+    // Configure autoresizing
     [menuView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     
-    // Force the menu view to size itself
+    // Force initial sizing
     [menuView sizeToFit];
+    
+    // Get the sized frame and ensure it fits in our bounds
+    NSRect menuFrame = [menuView frame];
+    NSRect viewBounds = [view bounds];
+    menuFrame.size.width = MIN(menuFrame.size.width, viewBounds.size.width);
+    menuFrame.size.height = viewBounds.size.height; // Force to panel height
+    [menuView setFrame:menuFrame];
     
     NSLog(@"Panel: Adding menu view with frame: %@", NSStringFromRect([menuView frame]));
     NSLog(@"Panel: Menu view class: %@", [menuView class]);
     
     [view addSubview:menuView];
-    [menuView release];
     
+    // IMPORTANT: Force the menu view to become visible
+    [menuView setHidden:NO];
+    [menuView setNeedsDisplay:YES];
+    
+    // Force the parent view to update
     [view setNeedsDisplay:YES];
+    
+    // Try to force window update if needed
+    NSWindow *window = [view window];
+    if (window) {
+        [window display];
+        [window flushWindow];
+    }
+    
+    [menuView release];
     
     NSLog(@"Panel: *** Menu display completed for '%@' ***", [menu title]);
     
-    // Log what we actually have in the view now
+    // Debug output
     NSLog(@"Panel: View now has %lu subviews", (unsigned long)[[view subviews] count]);
     for (NSView *subview in [view subviews]) {
-        NSLog(@"Panel: Subview: %@ frame: %@", [subview class], NSStringFromRect([subview frame]));
+        NSLog(@"Panel: Subview: %@ frame: %@ hidden: %d", [subview class], 
+              NSStringFromRect([subview frame]), [subview isHidden]);
     }
 }
 

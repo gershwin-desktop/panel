@@ -15,5 +15,6 @@
 - (void)startService;
 - (void)stopService;
 - (void)refreshMenuDisplay;
+- (NSMenu *)reconstructMenuFromDict:(NSDictionary *)menuDict;
 
 @end

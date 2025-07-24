@@ -18,7 +18,7 @@
 {
     self = [super init];
     if (self) {
-        menuService = [[MenuPanelService alloc] init];
+        menuService = [[AppMenuPanelService alloc] init];
     }
     return self;
 }
@@ -52,8 +52,12 @@
     
     [panelWindow makeKeyAndOrderFront:nil];
     
-    NSLog(@"Panel: Starting menu panel service...");
-    [menuService startService];
+    NSLog(@"Panel: Starting D-Bus menu panel service...");
+    BOOL success = [menuService startService];
+    if (!success) {
+        NSLog(@"Panel: WARNING - Failed to start D-Bus menu service");
+        NSLog(@"Panel: Make sure D-Bus is running and com.canonical.AppMenu.Registrar is available");
+    }
     
 #if CAN_USE_X11
     [self performSelector:@selector(setupXWindowProperties) 

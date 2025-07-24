@@ -1,11 +1,11 @@
 #import <AppKit/AppKit.h>
-#import "MenuPanelService.h"
+#import "AppMenuPanelService.h"
 
 @interface Panel : NSObject
 {
     NSWindow *panelWindow;
     NSView *contentView;
-    MenuPanelService *menuService;
+    AppMenuPanelService *menuService;
 }
 
 - (void)createPanel;
