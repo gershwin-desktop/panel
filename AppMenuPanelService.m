@@ -41,6 +41,9 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
 {
     NSLog(@"AppMenuPanelService: Starting appmenu-registrar based service...");
     
+    // Show initial status
+    [self displayInitialStatus];
+    
     // Check if appmenu-registrar is running
     if (![self checkAppMenuRegistrar]) {
         NSLog(@"AppMenuPanelService: appmenu-registrar not found, trying to start it...");
@@ -52,6 +55,47 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
     
     NSLog(@"AppMenuPanelService: Service started");
     return YES;
+}
+
+- (void)displayInitialStatus
+{
+    if (!_menuDisplayView) return;
+    
+    // Create initial status message
+    NSTextField *statusLabel = [[NSTextField alloc] initWithFrame:[_menuDisplayView bounds]];
+    [statusLabel setStringValue:@"Global Menu Panel - Starting..."];
+    [statusLabel setAlignment:NSCenterTextAlignment];
+    [statusLabel setTextColor:[NSColor controlTextColor]];
+    [statusLabel setBackgroundColor:[NSColor clearColor]];
+    [statusLabel setBezeled:NO];
+    [statusLabel setEditable:NO];
+    [statusLabel setSelectable:NO];
+    [statusLabel setFont:[NSFont systemFontOfSize:12]];
+    [statusLabel setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    
+    [_menuDisplayView addSubview:statusLabel];
+    [statusLabel release];
+    
+    [_menuDisplayView setNeedsDisplay:YES];
+    
+    // Update to "Ready" after a short delay
+    [self performSelector:@selector(updateStatusToReady) withObject:nil afterDelay:1.0];
+}
+
+- (void)updateStatusToReady
+{
+    if (!_menuDisplayView) return;
+    
+    // Find and update the status label
+    NSArray *subviews = [_menuDisplayView subviews];
+    for (NSView *subview in subviews) {
+        if ([subview isKindOfClass:[NSTextField class]]) {
+            NSTextField *label = (NSTextField *)subview;
+            [label setStringValue:@"Global Menu Panel - Ready (focus an application)"];
+            [_menuDisplayView setNeedsDisplay:YES];
+            break;
+        }
+    }
 }
 
 - (BOOL)checkAppMenuRegistrar
@@ -170,6 +214,12 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
         return;
     }
     
+    // Skip our own panel window and other system windows
+    if (focused < 0x100000) {  // Skip very low window IDs (system windows)
+        XCloseDisplay(display);
+        return;
+    }
+    
     NSNumber *windowId = [NSNumber numberWithUnsignedLong:(unsigned long)focused];
     
     BOOL windowChanged = NO;
@@ -184,40 +234,46 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
         [currentFocusedWindow release];
         currentFocusedWindow = [windowId retain];
         
-        [self handleWindowFocusChanged:focused display:display];
+        // Do all window operations immediately while we have the display open
+        [self handleWindowFocusChangedImmediate:focused display:display];
     }
     
     XCloseDisplay(display);
 }
 
-- (void)handleWindowFocusChanged:(Window)window display:(Display *)display
+- (void)handleWindowFocusChangedImmediate:(Window)window display:(Display *)display
 {
     NSLog(@"AppMenuPanelService: handleWindowFocusChanged called for window 0x%lx", (unsigned long)window);
     
     @try {
-        // Check if window still exists
+        // Check if window still exists - do this first before any other calls
         XWindowAttributes attrs;
         if (XGetWindowAttributes(display, window, &attrs) != Success) {
-            NSLog(@"AppMenuPanelService: Window 0x%lx no longer exists", (unsigned long)window);
+            NSLog(@"AppMenuPanelService: Window 0x%lx is not accessible", (unsigned long)window);
             [self displayMenu:nil inView:_menuDisplayView];
             return;
         }
         
         // Get window info for logging
-        NSString *windowClass = [self getWindowClass:window display:display];
-        NSString *windowName = [self getWindowName:window display:display];
+        NSString *windowClass = [self getWindowClassImmediate:window display:display];
+        NSString *windowName = [self getWindowNameImmediate:window display:display];
         
         NSLog(@"AppMenuPanelService: Focused window: %@ (%@)", windowName, windowClass);
         
         // Check if this window has menu properties set by your theme
-        NSString *serviceName = [self getMenuServiceForWindow:window display:display];
-        NSString *objectPath = [self getMenuObjectPathForWindow:window display:display];
+        NSString *serviceName = [self getMenuServiceForWindowImmediate:window display:display];
+        NSString *objectPath = [self getMenuObjectPathForWindowImmediate:window display:display];
         
         if (serviceName && objectPath && [serviceName length] > 0 && [objectPath length] > 0) {
             NSLog(@"AppMenuPanelService: ✓ Found menu: service=%@ path=%@", serviceName, objectPath);
             [self fetchMenuFromService:serviceName objectPath:objectPath window:window];
         } else {
             NSLog(@"AppMenuPanelService: ✗ No menu properties found");
+            
+            // Log what we actually found for debugging
+            if (serviceName) NSLog(@"AppMenuPanelService:   Service name: '%@'", serviceName);
+            if (objectPath) NSLog(@"AppMenuPanelService:   Object path: '%@'", objectPath);
+            
             [self displayMenu:nil inView:_menuDisplayView];
         }
     }
@@ -229,17 +285,11 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
 
 #pragma mark - X11 Property Reading
 
-- (NSString *)getWindowClass:(Window)window display:(Display *)display
+- (NSString *)getWindowClassImmediate:(Window)window display:(Display *)display
 {
     @try {
         XClassHint classHint;
         memset(&classHint, 0, sizeof(classHint));
-        
-        // Check if window exists first
-        XWindowAttributes attrs;
-        if (XGetWindowAttributes(display, window, &attrs) != Success) {
-            return @"(inaccessible)";
-        }
         
         if (XGetClassHint(display, window, &classHint) == Success) {
             NSString *result = [NSString stringWithFormat:@"%s.%s", 
@@ -253,12 +303,11 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
         return @"unknown.unknown";
     }
     @catch (NSException *e) {
-        NSLog(@"AppMenuPanelService: Exception in getWindowClass: %@", e);
         return @"(exception)";
     }
 }
 
-- (NSString *)getWindowName:(Window)window display:(Display *)display
+- (NSString *)getWindowNameImmediate:(Window)window display:(Display *)display
 {
     @try {
         char *windowName = NULL;
@@ -270,52 +319,56 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
         return @"(no name)";
     }
     @catch (NSException *e) {
-        NSLog(@"AppMenuPanelService: Exception in getWindowName: %@", e);
         return @"(exception)";
     }
 }
 
-- (NSString *)getMenuServiceForWindow:(Window)window display:(Display *)display
+- (NSString *)getMenuServiceForWindowImmediate:(Window)window display:(Display *)display
 {
-    return [self getStringProperty:window property:"_DBUSMENU_SERVICE_NAME" display:display];
+    return [self getStringPropertyImmediate:window property:"_DBUSMENU_SERVICE_NAME" display:display];
 }
 
-- (NSString *)getMenuObjectPathForWindow:(Window)window display:(Display *)display
+- (NSString *)getMenuObjectPathForWindowImmediate:(Window)window display:(Display *)display
 {
-    return [self getStringProperty:window property:"_DBUSMENU_OBJECT_PATH" display:display];
+    return [self getStringPropertyImmediate:window property:"_DBUSMENU_OBJECT_PATH" display:display];
 }
 
-- (NSString *)getStringProperty:(Window)window property:(const char *)propName display:(Display *)display
+- (NSString *)getStringPropertyImmediate:(Window)window property:(const char *)propName display:(Display *)display
 {
-    Atom propAtom = XInternAtom(display, propName, True);
-    if (propAtom == None) return nil;
-    
-    Atom actualType;
-    int actualFormat;
-    unsigned long nItems, bytesAfter;
-    unsigned char *prop = NULL;
-    
-    int result = XGetWindowProperty(display, window, propAtom, 0, 1024, False, AnyPropertyType,
-                                   &actualType, &actualFormat, &nItems, &bytesAfter, &prop);
-    
-    if (result == Success && prop && nItems > 0) {
-        NSString *stringResult = nil;
+    @try {
+        Atom propAtom = XInternAtom(display, propName, True);
+        if (propAtom == None) return nil;
         
-        if (actualType == XA_STRING || actualFormat == 8) {
-            char *safeProp = malloc(nItems + 1);
-            if (safeProp) {
-                memcpy(safeProp, prop, nItems);
-                safeProp[nItems] = '\0';
-                stringResult = [NSString stringWithUTF8String:safeProp];
-                free(safeProp);
+        Atom actualType;
+        int actualFormat;
+        unsigned long nItems, bytesAfter;
+        unsigned char *prop = NULL;
+        
+        int result = XGetWindowProperty(display, window, propAtom, 0, 1024, False, AnyPropertyType,
+                                       &actualType, &actualFormat, &nItems, &bytesAfter, &prop);
+        
+        if (result == Success && prop && nItems > 0) {
+            NSString *stringResult = nil;
+            
+            if (actualType == XA_STRING || actualFormat == 8) {
+                char *safeProp = malloc(nItems + 1);
+                if (safeProp) {
+                    memcpy(safeProp, prop, nItems);
+                    safeProp[nItems] = '\0';
+                    stringResult = [NSString stringWithUTF8String:safeProp];
+                    free(safeProp);
+                }
             }
+            
+            XFree(prop);
+            return stringResult;
         }
         
-        XFree(prop);
-        return stringResult;
+        return nil;
     }
-    
-    return nil;
+    @catch (NSException *e) {
+        return nil;
+    }
 }
 
 #pragma mark - Menu Fetching via dbus-send
@@ -439,27 +492,67 @@ static int x11ErrorHandler(Display *display, XErrorEvent *error)
     [subviews release];
     
     if (!menu || [menu numberOfItems] == 0) {
-        NSLog(@"AppMenuPanelService: Clearing menu display");
+        NSLog(@"AppMenuPanelService: No menu - showing status text");
+        
+        // Create a status label to show the panel is working
+        NSTextField *statusLabel = [[NSTextField alloc] initWithFrame:[view bounds]];
+        [statusLabel setStringValue:@"Global Menu Panel - No menu found"];
+        [statusLabel setAlignment:NSCenterTextAlignment];
+        [statusLabel setTextColor:[NSColor controlTextColor]];
+        [statusLabel setBackgroundColor:[NSColor clearColor]];
+        [statusLabel setBezeled:NO];
+        [statusLabel setEditable:NO];
+        [statusLabel setSelectable:NO];
+        [statusLabel setFont:[NSFont systemFontOfSize:12]];
+        [statusLabel setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        
+        [view addSubview:statusLabel];
+        [statusLabel release];
+        
         [view setNeedsDisplay:YES];
         return;
     }
     
     NSLog(@"AppMenuPanelService: Creating menu view for %ld items", (long)[menu numberOfItems]);
     
-    // Create horizontal menu view
-    NSMenuView *menuView = [[NSMenuView alloc] initWithFrame:[view bounds]];
+    // Create a container with both status and menu
+    NSView *containerView = [[NSView alloc] initWithFrame:[view bounds]];
+    [containerView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    
+    // Add status text on the left
+    NSTextField *statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(5, 0, 200, [view bounds].size.height)];
+    [statusLabel setStringValue:[NSString stringWithFormat:@"Menu: %@ (%ld items)", 
+                                 [menu title], (long)[menu numberOfItems]]];
+    [statusLabel setAlignment:NSLeftTextAlignment];
+    [statusLabel setTextColor:[NSColor controlTextColor]];
+    [statusLabel setBackgroundColor:[NSColor clearColor]];
+    [statusLabel setBezeled:NO];
+    [statusLabel setEditable:NO];
+    [statusLabel setSelectable:NO];
+    [statusLabel setFont:[NSFont systemFontOfSize:10]];
+    [statusLabel setAutoresizingMask:NSViewMaxXMargin];
+    
+    [containerView addSubview:statusLabel];
+    [statusLabel release];
+    
+    // Create horizontal menu view on the right
+    NSRect menuFrame = NSMakeRect(210, 0, [view bounds].size.width - 215, [view bounds].size.height);
+    NSMenuView *menuView = [[NSMenuView alloc] initWithFrame:menuFrame];
     [menuView setMenu:menu];
     [menuView setHorizontal:YES];
     [menuView setInterfaceStyle:NSMacintoshInterfaceStyle];
     [menuView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
     
     [menuView sizeToFit];
-    [view addSubview:menuView];
+    [containerView addSubview:menuView];
     [menuView release];
+    
+    [view addSubview:containerView];
+    [containerView release];
     
     [view setNeedsDisplay:YES];
     
-    NSLog(@"AppMenuPanelService: ✓ Menu display completed");
+    NSLog(@"AppMenuPanelService: ✓ Menu display completed with status text");
 }
 
 @end
